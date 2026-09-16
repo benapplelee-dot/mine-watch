@@ -1,0 +1,98 @@
+name: 发布加密矿山报告
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: mine-watch-publish
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  publish-encrypted-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: 校验仓库与加密报告外壳
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import base64
+          import json
+          from html.parser import HTMLParser
+          from pathlib import Path
+          import re
+          import subprocess
+
+          tracked = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
+          allowed = {'index.html', 'README.md'}
+          unexpected = [p for p in tracked if p and p not in allowed and not
+                        (p.startswith('.github/workflows/') and p.endswith(('.yml', '.yaml')))]
+          if unexpected:
+              raise SystemExit('公开仓库包含非发布文件，拒绝部署：' + ', '.join(unexpected))
+
+          class EncryptedPayload(HTMLParser):
+              def __init__(self):
+                  super().__init__(convert_charrefs=True)
+                  self.payloads = []
+                  self.current = None
+              def handle_starttag(self, tag, attrs):
+                  attrs = dict(attrs)
+                  if tag == 'script' and attrs.get('src'):
+                      raise ValueError('加密外壳不得加载外部脚本')
+                  if attrs.get('id') == 'encrypted-report':
+                      if tag != 'script' or attrs.get('type') != 'application/json':
+                          raise ValueError('encrypted-report 必须是 application/json script')
+                      self.current = []
+                      self.payloads.append(self.current)
+              def handle_data(self, data):
+                  if self.current is not None:
+                      self.current.append(data)
+              def handle_endtag(self, tag):
+                  if tag == 'script':
+                      self.current = None
+
+          document = Path('index.html').read_text(encoding='utf-8')
+          if re.search(r'"(?:projects|events|projectReviews|reportAsOf)"\s*:', document):
+              raise SystemExit('网页含明文报告数据字段，拒绝部署')
+          parser = EncryptedPayload()
+          parser.feed(document)
+          parser.close()
+          if len(parser.payloads) != 1:
+              raise SystemExit('必须且只能包含一个 encrypted-report 加密载荷')
+          payload = json.loads(''.join(parser.payloads[0]))
+          expected = {'v', 'kdf', 'hash', 'iterations', 'salt', 'iv', 'ciphertext'}
+          if not isinstance(payload, dict) or set(payload) != expected:
+              raise SystemExit('加密载荷字段不符合发布契约')
+          if (type(payload['v']) is not int or payload['v'] != 1 or
+              payload['kdf'] != 'PBKDF2' or payload['hash'] != 'SHA-256' or
+              type(payload['iterations']) is not int or payload['iterations'] != 600000):
+              raise SystemExit('不支持的加密派生参数')
+          salt = base64.b64decode(payload['salt'], validate=True)
+          iv = base64.b64decode(payload['iv'], validate=True)
+          ciphertext = base64.b64decode(payload['ciphertext'], validate=True)
+          if len(salt) != 16 or len(iv) != 12 or len(ciphertext) <= 16:
+              raise SystemExit('加密载荷长度无效')
+          print('加密报告外壳检查通过。部署阶段不读取研究数据、不解密报告。')
+          PY
+      - name: 仅准备加密网页
+        run: |
+          mkdir -p dist
+          cp index.html dist/index.html
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: dist
+      - name: 发布加密网页
+        id: deployment
+        uses: actions/deploy-pages@v4
