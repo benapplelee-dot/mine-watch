@@ -35,7 +35,7 @@ jobs:
           import subprocess
 
           tracked = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
-          allowed = {'index.html', 'README.md', 'au/index.html', 'dd/index.html'}
+          allowed = {'index.html', 'README.md', 'au/index.html', 'dd/index.html', 'dd/1/index.html', 'dd/2/index.html'}
           unexpected = [p for p in tracked if p and p not in allowed and not
                         (p.startswith('.github/workflows/') and p.endswith(('.yml', '.yaml')))]
           if unexpected:
@@ -62,7 +62,7 @@ jobs:
                   if tag == 'script':
                       self.current = None
 
-          for page in ('index.html', 'au/index.html', 'dd/index.html'):
+          for page in ('index.html', 'au/index.html', 'dd/index.html', 'dd/1/index.html', 'dd/2/index.html'):
             if not Path(page).exists():
                 continue
             document = Path(page).read_text(encoding='utf-8')
@@ -90,10 +90,11 @@ jobs:
           PY
       - name: 仅准备加密网页
         run: |
-          mkdir -p dist/au dist/dd
+          mkdir -p dist/au dist/dd/1 dist/dd/2
           cp index.html dist/index.html
           if [ -f au/index.html ]; then cp au/index.html dist/au/index.html; fi
           if [ -f dd/index.html ]; then cp dd/index.html dist/dd/index.html; fi
+          for n in 1 2; do if [ -f dd/$n/index.html ]; then cp dd/$n/index.html dist/dd/$n/index.html; fi; done
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v4
         with:
